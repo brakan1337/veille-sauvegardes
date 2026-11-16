@@ -1,0 +1,11 @@
+# Copier en terraform.tfvars et adapter. Clients fictifs.
+domaine            = "veille.infogerance.example"
+zone_dns_id        = "Z0123456789ABCDEFGHIJ"
+cidr_admin         = ["198.51.100.0/24"]
+version_collecteur = "v1.0.0"
+
+clients = {
+  "boulangerie-dupuy"  = {}
+  "cabinet-lafitte"    = { heure_rapport = "08:00" }
+  "transports-darrieu" = { type_instance = "t4g.small" }
+}

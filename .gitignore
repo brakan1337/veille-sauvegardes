@@ -1,0 +1,11 @@
+bin/
+dist/
+donnees/
+*.exe
+
+# Terraform : dossiers de travail, état et vraies valeurs ne se publient jamais
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+infra/modules/**/.terraform.lock.hcl

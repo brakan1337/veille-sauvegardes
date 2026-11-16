@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Sauvegardes · veille</title>
+<style>
+  :root { --fond:#f4f5f7; --carte:#fff; --bord:#dde1e6; --texte:#1d2329; --doux:#5f6873;
+          --ok:#1e7a46; --ok-fond:#e3f3ea; --alerte:#b42318; --alerte-fond:#fdecea;
+          --muet:#8a5a00; --muet-fond:#fff2d6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--fond); color:var(--texte); }
+  main { max-width:1100px; margin:0 auto; padding:28px clamp(16px,4vw,40px) 60px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .doux { color:var(--doux); }
+  .chiffres { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:20px 0; }
+  .chiffres div { background:var(--carte); border:1px solid var(--bord); border-radius:10px; padding:12px 16px; }
+  .chiffres strong { display:block; font-size:1.8rem; }
+  .serveur { background:var(--carte); border:1px solid var(--bord); border-radius:10px; padding:16px 20px; margin-bottom:14px; }
+  .serveur.alerte { border-left:5px solid var(--alerte); }
+  .serveur.muet { border-left:5px solid var(--muet); }
+  .entete { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; justify-content:space-between; }
+  .entete h2 { font-size:1.1rem; margin:0; }
+  .badge { font-size:.75rem; font-weight:700; padding:2px 9px; border-radius:10px; }
+  .badge.ok { color:var(--ok); background:var(--ok-fond); }
+  .badge.alerte { color:var(--alerte); background:var(--alerte-fond); }
+  .badge.muet { color:var(--muet); background:var(--muet-fond); }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  td { padding:6px 8px; border-top:1px solid var(--bord); vertical-align:top; }
+  .chemin { overflow-wrap:anywhere; }
+  .defilement { overflow-x:auto; }
+  .vide { background:var(--carte); border:1px dashed var(--bord); border-radius:10px; padding:24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>État des sauvegardes</h1>
+  <p class="doux">Mis à jour le {{.Le.Format "02/01/2006 à 15:04"}} · la page se recharge chaque minute.</p>
+
+  <div class="chiffres">
+    <div><span class="doux">En ordre</span><strong>{{.OK}}</strong></div>
+    <div><span class="doux">En alerte</span><strong>{{.Alertes}}</strong></div>
+    <div><span class="doux">Muets</span><strong>{{.Muets}}</strong></div>
+  </div>
+
+  {{range .Serveurs}}
+  <section class="serveur {{minuscule .Etat}}">
+    <div class="entete">
+      <h2>{{.Serveur}} <span class="badge {{minuscule .Etat}}">{{.Etat}}</span></h2>
+      <span class="doux">dernier rapport il y a {{duree .Silence}} · {{.Systeme}} · agent {{.Version}}</span>
+    </div>
+    {{if eq .Etat "MUET"}}<p>Aucun rapport depuis {{duree .Silence}} : l'agent ou le serveur est peut-être arrêté. Les résultats ci-dessous datent du dernier rapport.</p>{{end}}
+    <div class="defilement">
+    <table>
+      {{range .Resultats}}
+      <tr>
+        <td><span class="badge {{minuscule .Statut}}">{{.Statut}}</span></td>
+        <td><strong>{{.Nom}}</strong><br><span class="doux chemin">{{.Chemin}}</span></td>
+        <td class="chemin">{{.Detail}}{{if .Fichier}}<br><span class="doux">{{.Fichier}}</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </table>
+    </div>
+  </section>
+  {{else}}
+  <p class="vide">Aucun agent n'a encore envoyé de rapport.</p>
+  {{end}}
+</main>
+</body>
+</html>

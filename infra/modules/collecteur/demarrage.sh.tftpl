@@ -1,0 +1,63 @@
+#!/bin/bash
+# Premier démarrage du collecteur ${nom_domaine}.
+# Les secrets ne sont pas dans ce script : la machine les lit dans le coffre AWS
+# grâce à son rôle, qui ne l'autorise à lire que les siens.
+set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -q
+apt-get install -y -q caddy awscli curl
+
+useradd --system --no-create-home --shell /usr/sbin/nologin veille || true
+install -d -o veille -g veille -m 0750 /var/lib/veille
+
+curl --fail --silent --show-error --location --proto '=https' \
+  --output /usr/local/bin/veille-collecteur "${url_binaire}"
+chmod 0755 /usr/local/bin/veille-collecteur
+
+lire() {
+  aws ssm get-parameter --region "${region}" --with-decryption --name "$1" \
+    --query Parameter.Value --output text
+}
+
+umask 077
+cat >/etc/veille-collecteur.env <<FIN
+VEILLE_JETON_AGENTS=$(lire "${parametre_jeton}")
+VEILLE_MOT_DE_PASSE_ADMIN=$(lire "${parametre_admin}")
+VEILLE_ADRESSE=127.0.0.1:8080
+VEILLE_DONNEES=/var/lib/veille/rapports.jsonl
+VEILLE_HEURE_RAPPORT=${heure_rapport}
+%{ if parametre_hook != "" ~}
+VEILLE_WEBHOOK=$(lire "${parametre_hook}")
+%{ endif ~}
+FIN
+umask 022
+
+cat >/etc/systemd/system/veille-collecteur.service <<FIN
+[Unit]
+Description=Collecteur des rapports de sauvegarde
+After=network-online.target
+
+[Service]
+User=veille
+EnvironmentFile=/etc/veille-collecteur.env
+ExecStart=/usr/local/bin/veille-collecteur
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/veille
+
+[Install]
+WantedBy=multi-user.target
+FIN
+
+# Caddy obtient et renouvelle seul le certificat https du domaine.
+cat >/etc/caddy/Caddyfile <<FIN
+${nom_domaine} {
+  reverse_proxy 127.0.0.1:8080
+}
+FIN
+
+systemctl daemon-reload
+systemctl enable --now veille-collecteur
+systemctl reload caddy

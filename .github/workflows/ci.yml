@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (agent et collecteur)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Mise en forme
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - name: Tests (avec détection des accès concurrents)
+        run: go test -race ./...
+      - name: Compilation croisée
+        run: |
+          for cible in linux/amd64 linux/arm64 windows/amd64; do
+            GOOS=${cible%/*} GOARCH=${cible#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/...
+          done
+
+  bash:
+    name: Script d'installation (ShellCheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --severity=style deploiement/installer-agent.sh
+
+  terraform:
+    name: Terraform (format, validation, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -recursive -check infra
+      - name: Module collecteur
+        working-directory: infra/modules/collecteur
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform test
+      - name: Parc des clients
+        working-directory: infra/clients
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+  bout-en-bout:
+    name: Installation réelle sous systemd
+    runs-on: ubuntu-latest
+    needs: [go, bash]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Compiler
+        run: |
+          CGO_ENABLED=0 go build -o bin/veille-agent -ldflags "-X main.version=ci" ./cmd/agent
+          CGO_ENABLED=0 go build -o bin/veille-collecteur -ldflags "-X main.version=ci" ./cmd/collecteur
+      - name: Démarrer un collecteur
+        run: |
+          echo "JETON=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "MDP=$(openssl rand -hex 12)" >> "$GITHUB_ENV"
+      - run: |
+          VEILLE_JETON_AGENTS="$JETON" VEILLE_MOT_DE_PASSE_ADMIN="$MDP" VEILLE_ADRESSE=127.0.0.1:8080 \
+            VEILLE_DONNEES="$RUNNER_TEMP/rapports.jsonl" nohup bin/veille-collecteur > "$RUNNER_TEMP/collecteur.log" 2>&1 &
+          for _ in $(seq 20); do curl -sf http://127.0.0.1:8080/sante && break; sleep 0.5; done
+      - name: Créer des sauvegardes (une bonne, une qui a fondu)
+        run: |
+          sudo mkdir -p /srv/sauvegardes/compta /srv/sauvegardes/fichiers
+          sudo truncate -s 40M /srv/sauvegardes/compta/compta-hier.sql.gz
+          sudo touch -d '-28 hours' /srv/sauvegardes/compta/compta-hier.sql.gz
+          sudo truncate -s 2M /srv/sauvegardes/compta/compta-nuit.sql.gz
+          sudo truncate -s 30M /srv/sauvegardes/fichiers/partages.tar.zst
+          sudo chmod -R go-rwx /srv/sauvegardes
+          cat > "$RUNNER_TEMP/sauvegardes.json" <<'FIN'
+          [
+            {"nom": "Base comptable", "chemin": "/srv/sauvegardes/compta", "motif": "*.sql.gz", "age_max": "26h", "taille_min": "1Mo"},
+            {"nom": "Partages", "chemin": "/srv/sauvegardes/fichiers", "motif": "*.tar.zst", "age_max": "26h", "taille_min": "10Mo"}
+          ]
+          FIN
+      - name: Installer l'agent avec le script Bash
+        run: |
+          sudo deploiement/installer-agent.sh --collecteur http://127.0.0.1:8080 --jeton "$JETON" \
+            --binaire bin/veille-agent --config "$RUNNER_TEMP/sauvegardes.json" --lecture /srv/sauvegardes
+      - name: Lancer le service et vérifier le rapport reçu
+        run: |
+          sudo systemctl start veille-agent.service
+          sudo journalctl -u veille-agent --no-pager
+          etat=$(curl -sf -u "admin:$MDP" http://127.0.0.1:8080/api/etat)
+          echo "$etat" | jq .
+          test "$(echo "$etat" | jq '.alertes')" = 1
+          test "$(echo "$etat" | jq -r '.serveurs[0].resultats[0].statut')" = EN_CHUTE
+          test "$(echo "$etat" | jq -r '.serveurs[0].resultats[1].statut')" = OK
+      - name: Le script se relance sans casse
+        run: |
+          sudo deploiement/installer-agent.sh --collecteur http://127.0.0.1:8080 --jeton "$JETON" --binaire bin/veille-agent
+          systemctl is-enabled veille-agent.timer
+          sudo grep -q '"Base comptable"' /etc/veille/agent.json
+      - name: Journal du collecteur
+        if: always()
+        run: cat "$RUNNER_TEMP/collecteur.log"
